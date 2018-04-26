@@ -1,93 +1,124 @@
-/* eslint-env mocha */
-/* globals expect */
+import _ from 'underscore';
 
-import {getCredentials, api, request, credentials} from '../../data/api-data.js';
+// settings endpoints
+RocketChat.API.v1.addRoute('settings.public', { authRequired: false }, {
+	get() {
+		const { offset, count } = this.getPaginationItems();
+		const { sort, fields, query } = this.parseJsonQuery();
 
-describe('[Settings]', function() {
-	this.retries(0);
+		let ourQuery = {
+			hidden: { $ne: true },
+			'public': true
+		};
 
-	before(done => getCredentials(done));
+		ourQuery = Object.assign({}, query, ourQuery);
 
-	describe('[/settings.public]', () => {
-		it('should return public settings', (done) => {
-			request.get(api('settings.public'))
-				.expect('Content-Type', 'application/json')
-				.expect(200)
-				.expect((res) => {
-					expect(res.body).to.have.property('success', true);
-					expect(res.body).to.have.property('settings');
-					expect(res.body).to.have.property('count');
-				})
-				.end(done);
+		const settings = RocketChat.models.Settings.find(ourQuery, {
+			sort: sort ? sort : { _id: 1 },
+			skip: offset,
+			limit: count,
+			fields: Object.assign({ _id: 1, value: 1 }, fields)
+		}).fetch();
+
+		return RocketChat.API.v1.success({
+			settings,
+			count: settings.length,
+			offset,
+			total: RocketChat.models.Settings.find(ourQuery).count()
 		});
-	});
+	}
+});
 
-	describe('[/settings]', () => {
-		it('should return private settings', (done) => {
-			request.get(api('settings'))
-				.set(credentials)
-				.expect('Content-Type', 'application/json')
-				.expect(200)
-				.expect((res) => {
-					expect(res.body).to.have.property('success', true);
-					expect(res.body).to.have.property('settings');
-					expect(res.body).to.have.property('count');
-				})
-				.end(done);
-		});
-	});
+RocketChat.API.v1.addRoute('settings.oauth', { authRequired: false }, {
+	get() {
+		const mountOAuthServices = () => {
+			const oAuthServicesEnabled = ServiceConfiguration.configurations.find({}, { fields: { secret: 0 } }).fetch();
 
-	describe('[/settings/:_id]', () => {
-		it('should return one setting', (done) => {
-			request.get(api('settings/Site_Url'))
-				.set(credentials)
-				.expect('Content-Type', 'application/json')
-				.expect(200)
-				.expect((res) => {
-					expect(res.body).to.have.property('success', true);
-					expect(res.body).to.have.property('_id', 'Site_Url');
-					expect(res.body).to.have.property('value');
-				})
-				.end(done);
-		});
-	});
+			return oAuthServicesEnabled.map((service) => {
+				if (service.custom || ['saml', 'cas'].includes(service.service)) {
+					return { ...service };
+				}
 
-	describe('[/service.configurations]', () => {
-		it('should return service configurations', (done) => {
-			request.get(api('service.configurations'))
-				.set(credentials)
-				.expect('Content-Type', 'application/json')
-				.expect(200)
-				.expect((res) => {
-					expect(res.body).to.have.property('success', true);
-					expect(res.body).to.have.property('configurations');
-				})
-				.end(done);
-		});
-	});
+				return {
+					_id: service._id,
+					name: service.service,
+					clientId: service.appId || service.clientId || service.consumerKey,
+					buttonLabelText: service.buttonLabelText || '',
+					buttonColor: service.buttonColor || '',
+					buttonLabelColor: service.buttonLabelColor || '',
+					custom: false
+				};
+			});
+		};
 
-	describe('/settings.oauth', () => {
-		it('should have return list of available oauth services when user is not logged', (done) => {
-			request.get(api('settings.oauth'))
-				.expect('Content-Type', 'application/json')
-				.expect(200)
-				.expect((res) => {
-					expect(res.body).to.have.property('success', true);
-					expect(res.body).to.have.property('services').and.to.be.an('array');
-				})
-				.end(done);
+		return RocketChat.API.v1.success({
+			services: mountOAuthServices()
+		});
+	}
+});
+
+RocketChat.API.v1.addRoute('settings', { authRequired: true }, {
+	get() {
+		const { offset, count } = this.getPaginationItems();
+		const { sort, fields, query } = this.parseJsonQuery();
+
+		let ourQuery = {
+			hidden: { $ne: true }
+		};
+
+		if (!RocketChat.authz.hasPermission(this.userId, 'view-privileged-setting')) {
+			ourQuery.public = true;
+		}
+
+		ourQuery = Object.assign({}, query, ourQuery);
+
+		const settings = RocketChat.models.Settings.find(ourQuery, {
+			sort: sort ? sort : { _id: 1 },
+			skip: offset,
+			limit: count,
+			fields: Object.assign({ _id: 1, value: 1 }, fields)
+		}).fetch();
+
+		return RocketChat.API.v1.success({
+			settings,
+			count: settings.length,
+			offset,
+			total: RocketChat.models.Settings.find(ourQuery).count()
+		});
+	}
+});
+
+RocketChat.API.v1.addRoute('settings/:_id', { authRequired: true }, {
+	get() {
+		if (!RocketChat.authz.hasPermission(this.userId, 'view-privileged-setting')) {
+			return RocketChat.API.v1.unauthorized();
+		}
+
+		return RocketChat.API.v1.success(_.pick(RocketChat.models.Settings.findOneNotHiddenById(this.urlParams._id), '_id', 'value'));
+	},
+	post() {
+		if (!RocketChat.authz.hasPermission(this.userId, 'edit-privileged-setting')) {
+			return RocketChat.API.v1.unauthorized();
+		}
+
+		check(this.bodyParams, {
+			value: Match.Any
 		});
 
-		it('should have return list of available oauth services when user is logged', (done) => {
-			request.get(api('settings.oauth'))
-				.set(credentials)
-				.expect('Content-Type', 'application/json')
-				.expect(200)
-				.expect((res) => {
-					expect(res.body).to.have.property('success', true);
-					expect(res.body).to.have.property('services').and.to.be.an('array');
-				})
-				.end(done);
+		if (RocketChat.models.Settings.updateValueNotHiddenById(this.urlParams._id, this.bodyParams.value)) {
+			return RocketChat.API.v1.success();
+		}
+
+		return RocketChat.API.v1.failure();
+	}
+});
+
+RocketChat.API.v1.addRoute('service.configurations', { authRequired: false }, {
+	get() {
+		const ServiceConfiguration = Package['service-configuration'].ServiceConfiguration;
+
+		return RocketChat.API.v1.success({
+			configurations: ServiceConfiguration.configurations.find({}, { fields: { secret: 0 } }).fetch()
 		});
-	});
+	}
 });
